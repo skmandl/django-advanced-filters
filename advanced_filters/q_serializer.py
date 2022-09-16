@@ -1,8 +1,13 @@
 """This is a module to serializers/deserializes Django Q (query) object."""
-from datetime import datetime, date
+from datetime import datetime, date,timedelta
+from django.utils import timezone
+from dateutil.relativedelta import relativedelta
+
 import base64
 import time
+import importlib
 
+import six
 from django.db.models import Q
 from django.core.serializers.base import SerializationError
 
@@ -19,12 +24,41 @@ try:
 except OverflowError:
     max_ts = time.mktime((2038,) + (0,) * 8)  # limit 32bits
 
+def get_extra_date_options(options=[]):
+    options.append({"id":"this_week","text":"This Week"})
+    options.append({"id":"this_month","text":"This Month"})
+    options.append({"id":"last_week","text":"Last Week"})
+    options.append({"id":"last_month","text":"Last Month"})
+    return options
 
 def dt2ts(obj):
     return time.mktime(obj.timetuple()) if isinstance(obj, date) else obj
+def get_this_week():
+    current_date=timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    last_week=current_date-timezone.timedelta(days=7)
+    current_date_=current_date+timezone.timedelta(days=1)
+    return(last_week,current_date_)
+
+def get_this_month():
+    current_date=timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    this_month_first_date=current_date.replace(day=1,hour=0, minute=0, second=0, microsecond=0)
+    current_date_=current_date+timezone.timedelta(days=1)
+    return(this_month_first_date,current_date_)
+
+def get_last_week():
+    current_date=timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    last_week_last_date=current_date-timezone.timedelta(days=6)
+    last_week_first_date=current_date-timezone.timedelta(days=14)
+    return(last_week_first_date,last_week_last_date)
 
 
-class QSerializer:
+def get_last_month():
+    current_1st_day=timezone.now().replace(day=1,hour=0, minute=0, second=0, microsecond=0)
+    last_month_last_date=current_1st_day-timezone.timedelta(days=1)
+    # last_month_first_date=last_month_last_date.replace(day=1,hour=0, minute=0, second=0, microsecond=0)
+    return(last_month_first_date,current_1st_day)
+
+class QSerializer(object):
     """
     A Q object serializer base class. Pass base64=True when initializing
     to Base-64 encode/decode the returned/passed string.
@@ -45,10 +79,12 @@ class QSerializer:
 
     def prepare_value(self, qtuple):
         if self._is_range(qtuple):
-            qtuple[1][0] = qtuple[1][0] or min_ts
-            qtuple[1][1] = qtuple[1][1] or max_ts
-            qtuple[1] = (datetime.fromtimestamp(qtuple[1][0]),
-                         datetime.fromtimestamp(qtuple[1][1]))
+            try:
+                qtuple[1][0] = qtuple[1][0] or min_ts
+                qtuple[1][1] = qtuple[1][1] or max_ts
+                qtuple[1] = (datetime.fromtimestamp(qtuple[1][0]),
+                            datetime.fromtimestamp(qtuple[1][1]))
+            except:pass
         return qtuple
 
     def serialize(self, q):
@@ -70,9 +106,18 @@ class QSerializer:
         De-serialize a Q object from a (possibly nested) dict.
         """
         children = []
+        extra_dates_options=[data['id'] for data in get_extra_date_options()]
         for child in d.pop('children'):
             if isinstance(child, dict):
                 children.append(self.deserialize(child))
+            elif child[1] in extra_dates_options:
+                """Change to range field and assign value based on selected date option """
+                child[0]=child[0].split('__')[0]+"__range"
+                module = importlib.import_module("advanced_filters.q_serializer")
+                handler_function = getattr(module,"get_"+child[1])
+                child[1]=handler_function()
+                dsr_value=self.prepare_value(child)
+                children.append(dsr_value)
             else:
                 children.append(self.prepare_value(child))
         query = Q()
@@ -120,10 +165,11 @@ class QSerializer:
             raise SerializationError
         string = json.dumps(self.serialize(obj), default=dt2ts)
         if self.b64_enabled:
-            return base64.b64encode(string.encode("latin-1")).decode("utf-8")
+            return base64.b64encode(six.b(string)).decode("utf-8")
         return string
 
     def loads(self, string, raw=False):
+        
         if self.b64_enabled:
             d = json.loads(base64.b64decode(string))
         else:

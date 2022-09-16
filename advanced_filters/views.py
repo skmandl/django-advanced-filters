@@ -7,7 +7,7 @@ from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 from django.utils.encoding import force_str
 from django.views.generic import View
-
+from .q_serializer import get_extra_date_options
 from advanced_filters.mixins import (
     CsrfExemptMixin,
     JSONResponseMixin,
@@ -75,5 +75,8 @@ class GetFieldChoices(CsrfExemptMixin, StaffuserRequiredMixin,
 
         results = [{'id': c[0], 'text': force_str(c[1])} for c in sorted(
                    choices, key=lambda x: (x[0] is not None, x[0]))]
-
+        if type(field).__name__=='DateTimeField' or type(field).__name__=='DateField':
+            results=get_extra_date_options(results)
+            print("extra option fetched")
+        print("result:",results)
         return self.render_json_response({'results': results})
